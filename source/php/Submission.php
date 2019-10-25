@@ -95,6 +95,11 @@ class Submission
         //Encrypt form meta
         if (!get_option('options_mod_form_crypt')) {
             update_post_meta($submission, 'form-data', $_POST);
+            // Check if data was damaged (prevent break later on)
+            $getData = get_post_meta($submission, 'form-data', true);
+            if (empty($getData)) {
+                \ModularityFormBuilder\Entity\PostType::repairDamagedSerializedFormData($submission);
+            }
         } else {
             update_post_meta($submission, 'form-data', \ModularityFormBuilder\App::encryptDecryptData('encrypt', $_POST));
         }

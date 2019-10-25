@@ -405,11 +405,37 @@ class PostType
         }
     }
 
+    /**
+     * Repairs a damaged serialized postmeta entry 
+     * 
+     * Serialized fix (line 422-424) found at https://stackoverflow.com/a/21389439/5121418
+     *
+     * This is a fix when the unencrypted data could not correctly be serialized. 
+     * It will get the raw serialized string that has some kind of formatting error and correct it self,
+     * after the serialized string has been fixed we will unserialize the data and store it again.
+     * @param [int] $postID
+     * @return Array
+     */
+    public static function repairDamagedSerializedFormData($postID) {
+        $meta_cache = wp_cache_get($postID, 'post_meta'); // Get the damaged serialized data
+        if ( isset($meta_cache['form-data']) ) {
+            $fixedSerializedData = preg_replace_callback ( '!s:(\d+):"(.*?)";!', function($match) {
+                return ($match[1] == strlen($match[2])) ? $match[0] : 's:' . strlen($match[2]) . ':"' . $match[2] . '";';
+            }, $meta_cache['form-data'][0]);
+            $getData = unserialize($fixedSerializedData);
+            update_post_meta($postID, 'form-data', $getData);
+            return $getData;
+        }
+        return array();
+    }
 
     public static function gatherFormData($post)
     {
         $data = array();
         $getData = get_post_meta($post->ID, 'form-data', true);
+        if (empty($getData)) {
+            $getData = self::repairDamagedSerializedFormData($post->ID);
+        }
         $indata = (is_array($getData)) ? $getData : unserialize(\ModularityFormBuilder\App::encryptDecryptData('decrypt', $getData));
 
         // Get the form id
@@ -477,7 +503,7 @@ class PostType
                         'name' => sanitize_title($field['labels'][$subfield]),
                         'required' => (is_array($field['required_fields']) && in_array($subfield,
                                 $field['required_fields'])),
-                        'value' => (!empty($indata[$subfield])) ? $indata[$subfield] : '',
+                        'value' => (!empty($indata[sanitize_title($field['labels'][$subfield])])) ? $indata[sanitize_title($field['labels'][$subfield])] : '',
                     );
                 }
 
