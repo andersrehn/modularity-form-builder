@@ -8,7 +8,6 @@ class App
 
     public function __construct()
     {
-        new PostType();
         new Submission();
         new Options();
 
@@ -21,21 +20,69 @@ class App
                 );
             }
         });
-
+        add_action('init', array($this, 'registerPostTypes'), 11);
         add_action('acf/render_field', array($this, 'addHiddenFields'), 10, 1);
         add_action('acf/save_post', array($this, 'updateFieldKeys'), 9);
-
-        add_filter('Municipio/blade/view_paths', array($this, 'addTemplatePaths'));
-
+        add_action('acf/update_value/name=granted_users', array($this, 'updateGrantedUser'), 10, 3);
         add_action('wp_ajax_delete_file', array($this, 'deleteFile'));
         add_action('wp_ajax_upload_files', array($this, 'uploadFiles'));
-
-
-
         add_action('wp_ajax_save_post', array($this, 'frontEndSavePost'));
         add_action('current_screen', array($this, 'restrictUserPages'));
+        add_action('restrict_manage_posts', array($this, 'formFilter'));
+        add_action('admin_head', array($this, 'jsonSelectedValues'));
+
+        add_filter('Municipio/blade/view_paths', array($this, 'addTemplatePaths'));
     }
 
+    /**
+     * Register post types
+     */
+    public function registerPostTypes()
+    {
+        // Default form submission post type
+        new Entity\PostType(
+            'form-submissions',
+            __('Form submission', 'modularity-form-builder'),
+            __('Form submissions', 'modularity-form-builder')
+        );
+
+        global $wpdb;
+        $postTypes = $wpdb->get_col(
+            "
+            SELECT pm1.meta_value FROM $wpdb->posts as p
+            LEFT JOIN $wpdb->postmeta pm1 ON p.ID = pm1.post_id
+            LEFT JOIN $wpdb->postmeta pm2 ON p.ID = pm2.post_id
+            WHERE p.post_status = 'publish'
+            AND pm1.meta_key = 'submission_post_type'
+            AND pm2.meta_key = 'custom_submission_post_type' && pm2.meta_value = 1
+            "
+        );
+
+        // Re-register custom form post types
+        if (!empty($postTypes)) {
+            foreach ($postTypes as $postType) {
+                if (!$postTypeObj = get_post_type_object($postType)) {
+                    continue;
+                }
+                unregister_post_type($postType);
+
+                $json = json_encode($postTypeObj);
+                $postTypeArr = json_decode($json, true);
+
+                unset($postTypeArr['show_in_rest']);
+                unset($postTypeArr['capabilities']);
+                unset($postTypeArr['capability_type']);
+                unset($postTypeArr['cap']);
+
+                new Entity\PostType(
+                    $postTypeArr['name'],
+                    $postTypeArr['labels']['singular_name'] ?? $postTypeArr['label'],
+                    $postTypeArr['label'],
+                    $postTypeArr
+                );
+            }
+        }
+    }
 
     /**
      * Add hidden field markup to form input fields
@@ -67,7 +114,7 @@ class App
         // New and old field values
         $newValues = $_POST['acf']['field_58eb302883a68'];
         $oldValues = $_POST['current-acf']['field_58eb302883a68'];
-        $defaultLabels = PostType::getSenderLabels();
+        $defaultLabels = Helper\SenderLabels::getLabels();
         $updatedValues = array();
 
         // Gather updated field labels (used as keys)
@@ -113,7 +160,7 @@ class App
 
     /**
      * Gets all posts connected to the form, and replaces the form data Keys
-     * @param int $moduleId The forms Post ID
+     * @param int   $moduleId    The forms Post ID
      * @param array $updatedKeys Array containing old and new key values
      * @return void
      */
@@ -135,6 +182,8 @@ class App
             foreach ($posts as $key => $post) {
                 // Get current form data
                 $metaVal = get_post_meta((int)$post['ID'], 'form-data', true);
+                $metaVal = $this->getDataAsArray($metaVal);
+
                 if (is_array($metaVal)) {
 
                     // Loop through address array
@@ -155,18 +204,34 @@ class App
                 if (!get_option('options_mod_form_crypt')) {
                     update_post_meta((int)$post['ID'], 'form-data', $metaVal);
                 } else {
-                    update_post_meta((int)$post['ID'], 'form-data',
-                        self::encryptDecryptData('encrypt', serialize($metaVal)));
-
+                    update_post_meta((int)$post['ID'], 'form-data', self::encryptDecryptData('encrypt', $metaVal));
                 }
-
             }
         }
     }
 
     /**
+     * Decrypt recursively until data is an array or limit is reached
+     * @param array|string $data  Data to be returned as array
+     * @param int          $limit Limits the recursion
+     * @return mixed
+     */
+    public function getDataAsArray($data, $limit = 0)
+    {
+        if (is_array($data) || $limit >= 10) {
+            return $data;
+        } else {
+            $data = maybe_unserialize(self::encryptDecryptData('decrypt', $data));
+            $limit++;
+            $data = $this->getDataAsArray($data, $limit);
+
+            return $data;
+        }
+    }
+
+    /**
      * Replaces keys in an arrays
-     * @param array $array Defualt array
+     * @param array  $array  Defualt array
      * @param string $oldKey Key to replace
      * @param string $newKey Replacement key
      * @return array               Modified array
@@ -223,9 +288,9 @@ class App
             }
         }
         if (!get_option('options_mod_form_crypt')) {
-            update_post_meta($postId, 'form-data', self::encryptDecryptData('encrypt', serialize($formData)));
-        } else {
             update_post_meta($postId, 'form-data', $formData);
+        } else {
+            update_post_meta($postId, 'form-data', self::encryptDecryptData('encrypt', $formData));
         }
 
         echo 'success';
@@ -265,7 +330,7 @@ class App
             if (!get_option('options_mod_form_crypt')) {
                 update_post_meta($postId, 'form-data', $formData);
             } else {
-                update_post_meta($postId, 'form-data', self::encryptDecryptData('encrypt', serialize($formData)));
+                update_post_meta($postId, 'form-data', self::encryptDecryptData('encrypt', $formData));
             }
 
 
@@ -291,9 +356,8 @@ class App
             if (!get_option('options_mod_form_crypt')) {
                 update_post_meta($postId, 'form-data', $data);
             } else {
-                update_post_meta($postId, 'form-data', self::encryptDecryptData('encrypt', serialize($data)));
+                update_post_meta($postId, 'form-data', self::encryptDecryptData('encrypt', $data));
             }
-
         }
 
         // Update post title and content
@@ -316,30 +380,80 @@ class App
 
     /**
      * Encrypt & decrypt data
-     * @param $type string encrypt or decrypt
-     * @param $str string data to encrypt or decrypt
+     * @param $method  string encrypt or decrypt
+     * @param $data    mixed data to encrypt or decrypt
      * @return string
      */
-    static function encryptDecryptData($meth, $str)
+    static function encryptDecryptData($method, $data)
     {
         if (defined('ENCRYPT_SECRET_VI') && defined('ENCRYPT_SECRET_KEY') && defined('ENCRYPT_METHOD')) {
-            switch ($meth) {
+            switch ($method) {
                 case 'encrypt':
-                    return base64_encode(openssl_encrypt(json_encode($str), ENCRYPT_METHOD, hash('sha256', ENCRYPT_SECRET_KEY), 0,
+                    $data = is_array($data) ? serialize($data) : $data;
+                    return base64_encode(openssl_encrypt(json_encode($data), ENCRYPT_METHOD,
+                        hash('sha256', ENCRYPT_SECRET_KEY), 0,
                         substr(hash('sha256', ENCRYPT_SECRET_VI), 0, 16)));
                     break;
                 case 'decrypt':
-                    return json_decode(openssl_decrypt(base64_decode($str), ENCRYPT_METHOD, hash('sha256', ENCRYPT_SECRET_KEY), 0,
+                    return json_decode(openssl_decrypt(base64_decode($data), ENCRYPT_METHOD,
+                        hash('sha256', ENCRYPT_SECRET_KEY), 0,
                         substr(hash('sha256', ENCRYPT_SECRET_VI), 0, 16)));
                     break;
                 default;
-                    return $str;
+                    return $data;
             }
-
         } else {
-            return $str;
+            return $data;
         }
     }
+
+    /**
+     * Encrypt & decrypt data
+     * @param $method  string encrypt or decrypt
+     * @param $data    mixed data to encrypt or decrypt
+     * @return string
+     */
+    static function encryptDecryptFile($method, $data)
+    {
+        if (defined('ENCRYPT_SECRET_VI') && defined('ENCRYPT_SECRET_KEY') && defined('ENCRYPT_METHOD')) {
+            switch ($method) {
+                case 'encrypt':
+                    return openssl_encrypt(
+                        $data,
+                        ENCRYPT_METHOD,
+                        hash('sha256', ENCRYPT_SECRET_KEY),
+                        0,
+                        substr(hash('sha256', ENCRYPT_SECRET_VI), 0, 16)
+                    );
+                    break;
+                case 'decrypt':
+                    return openssl_decrypt(
+                        $data,
+                        ENCRYPT_METHOD,
+                        hash('sha256', ENCRYPT_SECRET_KEY),
+                        0,
+                        substr(hash('sha256', ENCRYPT_SECRET_VI), 0, 16)
+                    );
+                    break;
+                default;
+                    return $data;
+            }
+        } else {
+            return $data;
+        }
+    }
+
+    /**
+     * Update granted user field with author id if author forget to add him/her self as granted user
+     */
+    public function updateGrantedUser($value, $post_id, $field)
+    {
+        if (is_array($value) && !in_array(get_current_user_id(), $value)) {
+            $value[] = get_current_user_id();
+        }
+        return $value;
+    }
+
 
     /**
      * Check if user have permission to edit or view form
@@ -363,24 +477,87 @@ class App
      */
     public function checkPermission()
     {
-        if (isset($_GET['post']) && !empty($_GET['post'])) {
+
+        if (isset($_GET['post'])) {
             $userRestriction = get_field('user_restriction', $_GET['post']);
+
             if ($userRestriction) {
                 if (current_user_can('administrator')) {
                     return true;
                 }
-
-                if (get_current_user_id() != get_post_field('post_author', $_GET['post'])) {
-                    wp_die(
-                        '<h1>' . __('Hello, you are not Superman, with full access?') . '</h1>' .
-                        '<p>' . __('Missing permissions') . '</p>',
-                        403
-                    );
+                if (get_current_user_id() !== get_post_field('post_author', $_GET['post'])) {
+                    $grantedUsers = get_field('granted_users', $_GET['post']);
+                    $granted = false;
+                    if (isset($grantedUsers) && !empty($grantedUsers)) {
+                        foreach ($grantedUsers as $user) {
+                            if ($user['ID'] === get_current_user_id()) {
+                                $granted = true;
+                            }
+                        }
+                    }
+                    if ($granted === false) {
+                        wp_die(
+                            '<h1>' . __('Hello, you do not have permission to edit this form') . '</h1>' .
+                            '<p>' . __('Please ask the creator/author of the form to grant you access.') . '</p>',
+                            403
+                        );
+                    }
                 }
             }
         }
-
         return false;
+    }
+
+    /**
+     * Filters admin list table
+     * @return void
+     */
+    public function formFilter()
+    {
+        global $typenow;
+
+        if ($typenow !== 'form-submissions') {
+            return;
+        }
+
+        $forms = get_posts(array(
+            'post_type' => 'mod-form',
+            'post_status' => 'publish',
+            'posts_per_page' => -1,
+            'numberposts' => -1
+        ));
+
+        echo '<select name="form"><option value="-1">' . __('Select form…', 'modularity-form-builder') . '</option>';
+
+        foreach ($forms as $form) {
+            $selected = isset($_GET['form']) && $_GET['form'] == $form->ID ? 'selected' : '';
+            echo '<option value="' . $form->ID . '" ' . $selected . '>' . $form->post_title . '</option>';
+        }
+        echo '</select>';
+    }
+
+    public function jsonSelectedValues()
+    {
+        //Get saved data
+        $fieldData = get_field('notify');
+
+        //Declare result
+        $result = array();
+
+        //Fill result array
+        if (isset($fieldData) && is_array($fieldData) && !empty($fieldData)) {
+            foreach ($fieldData as $field) {
+                $result[] = array(
+                    'conditional_field' => $field['form_conditional_field'],
+                    'conditional_field_equals' => $field['form_conditional_field_equals']
+                );
+            }
+        }
+
+        //Print json array
+        if (is_array($result) && !empty($result)) {
+            echo "<script> var notificationConditions = '" . json_encode($result) . "'; </script>";
+        }
     }
 }
 

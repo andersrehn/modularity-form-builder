@@ -1,38 +1,44 @@
 <?php
 
-namespace ModularityFormBuilder;
+namespace ModularityFormBuilder\Entity;
 
 class PostType
 {
-    public $postTypeSlug = 'form-submissions';
+    public $postTypeSlug;
+    public $nameSingular;
+    public $namePlural;
+    public $args;
 
-    public function __construct()
+    public function __construct($postTypeSlug, $nameSingular, $namePlural, $args = array())
     {
-        add_action('init', array($this, 'register'));
+        $this->postTypeSlug = $postTypeSlug;
+        $this->nameSingular = $nameSingular;
+        $this->namePlural = $namePlural;
+        $this->args = $args;
+
+        add_action('init', array($this, 'register'), 12);
         add_action('admin_menu', array($this, 'removePublishBox'));
         add_action('add_meta_boxes', array($this, 'formdata'), 10, 2);
-        add_action('restrict_manage_posts', array($this, 'formFilter'));
         add_action('edit_form_after_title', array($this, 'displayFeedbackId'), 10, 1);
         add_action('wp_enqueue_scripts', array($this, 'enqueue'));
         add_action('pre_get_posts', array($this, 'queryFilter'));
         add_action('save_post_' . $this->postTypeSlug, array($this, 'updateForm'));
-        add_action('manage_' . $this->postTypeSlug . '_posts_custom_column', array($this, 'tableColumnsContent'), 10,
-            2);
+        add_action('manage_' . $this->postTypeSlug . '_posts_custom_column', array($this, 'tableColumnsContent'), 10, 2);
 
         add_filter('Municipio/blog/post_settings', array($this, 'addEditButton'), 10, 2);
         add_filter('the_content', array($this, 'appendFormdata'));
         add_filter('manage_edit-' . $this->postTypeSlug . '_columns', array($this, 'tableColumns'));
         add_filter('manage_edit-' . $this->postTypeSlug . '_sortable_columns', array($this, 'listColumnsSorting'));
-        add_filter('acf/load_field/name=submission_post_type', array($this, 'submissionPostTypes'));
 
-        add_action('admin_head', array($this, 'jsonSelectedValues'));
+        //Force download of encrypted files
+        add_action('init', array($this, 'forceEcryptedFileDownload')); 
+    
     }
 
     public function addEditButton($items, $post)
     {
         if (is_object($post) && self::editableFrontend($post) && $post->post_type == $this->postTypeSlug) {
-            $items[] = '<a href="#modal-edit-post" class="settings-item"><i class="pricon pricon-space-right pricon-pen"></i> ' . __('Edit',
-                    'modularity-form-builder') . '</a>';
+            $items[] = '<a href="#modal-edit-post" class="settings-item"><i class="pricon pricon-space-right pricon-pen"></i> ' . __('Edit', 'modularity-form-builder') . '</a>';
         }
 
         return $items;
@@ -67,18 +73,18 @@ class PostType
     public function register()
     {
         $labels = array(
-            'name' => __('Form submissions', 'modularity-form-builder'),
-            'singular_name' => __('Form submission', 'modularity-form-builder'),
-            'add_new' => _x('Add New Form submission', 'modularity-form-builder', 'modularity-form-builder'),
-            'add_new_item' => __('Add New Form submission', 'modularity-form-builder'),
-            'edit_item' => __('Edit Form submission', 'modularity-form-builder'),
-            'new_item' => __('New Form submission', 'modularity-form-builder'),
-            'view_item' => __('View Form submission', 'modularity-form-builder'),
-            'search_items' => __('Search Form submissions', 'modularity-form-builder'),
-            'not_found' => __('No Form submissions found', 'modularity-form-builder'),
-            'not_found_in_trash' => __('No Form submissions found in Trash', 'modularity-form-builder'),
-            'parent_item_colon' => __('Parent Form submission:', 'modularity-form-builder'),
-            'menu_name' => __('Form submissions', 'modularity-form-builder'),
+            'name'                => $this->nameSingular,
+            'singular_name'       => $this->nameSingular,
+            'add_new'             => sprintf(__('Add new %s', 'modularity-form-builder'), $this->nameSingular),
+            'add_new_item'        => sprintf(__('Add new %s', 'modularity-form-builder'), $this->nameSingular),
+            'edit_item'           => sprintf(__('Edit %s', 'modularity-form-builder'), $this->nameSingular),
+            'new_item'            => sprintf(__('New %s', 'modularity-form-builder'), $this->nameSingular),
+            'view_item'           => sprintf(__('View %s', 'modularity-form-builder'), $this->nameSingular),
+            'search_items'        => sprintf(__('Search %s', 'modularity-form-builder'), $this->namePlural),
+            'not_found'           => sprintf(__('No %s found', 'modularity-form-builder'), $this->namePlural),
+            'not_found_in_trash'  => sprintf(__('No %s found in trash', 'modularity-form-builder'), $this->namePlural),
+            'parent_item_colon'   => sprintf(__('Parent %s:', 'modularity-form-builder'), $this->nameSingular),
+            'menu_name'           => $this->namePlural,
         );
 
         $args = array(
@@ -103,8 +109,12 @@ class PostType
                 'create_posts' => 'do_not_allow',
             ),
             'map_meta_cap' => true,
-            'supports' => array('title')
+            'supports' => array('title'),
+            'show_in_rest' => false
         );
+
+        //Append default configuration
+        $args = array_merge($args, $this->args);
 
         register_post_type($this->postTypeSlug, $args);
     }
@@ -121,7 +131,7 @@ class PostType
 
     /**
      * Adds meta box for viewing submission data
-     * @param  string $postType
+     * @param  string  $postType
      * @param  WP_Post $post
      * @return void
      */
@@ -131,45 +141,144 @@ class PostType
             return;
         }
 
-        add_meta_box('formdata', 'Submission data', array($this, 'formdataDisplay'), $postType, 'normal', 'default');
+        add_meta_box(
+            'formdata', 
+            __('Submission data', 'modularity-form-builder'), 
+            array($this, 'formdataDisplay'), 
+            $postType, 
+            'normal', 
+            'default'
+        );
     }
 
 
     /**
      * Checks user access to formdata
-     * @param  int $modulID
+     * @param  int $moduleId
      * @return true if user is granted access otherwise void
      */
-    public function grantedUsers($modulID)
+    public function isGrantedUser($moduleId)
     {
-        if (isset($modulID) || empty($modulID)) {
-            $userRestriction = get_field('user_restriction', $modulID);
+        if (isset($moduleId) || empty($moduleId)) {
+
+            $userRestriction = get_field('user_restriction', $moduleId);
+
             if ($userRestriction) {
+                
+                //Always allow administrators
                 if (current_user_can('administrator')) {
                     return true;
                 }
-                if (get_current_user_id() !== get_post_field('post_author', $modulID)) {
-                    $grantedUsers = get_field('granted_users', $modulID);
-                    $granted = false;
-                    if (isset($grantedUsers) && !empty($grantedUsers)) {
-                        foreach($grantedUsers as $user){
-                            if($user['ID'] === get_current_user_id()) {
-                                $granted = true;
-                            }
+
+                //Always allow author of the post 
+                if (get_current_user_id() == get_post_field('post_author', $moduleId)) {
+                    return true; 
+                }
+                    
+                //Check if granted user
+                $grantedUsers = get_field('granted_users', $moduleId);
+
+                if (!empty($grantedUsers) && is_array($grantedUsers)) {
+                    foreach ($grantedUsers as $user) {
+                        if ($user['ID'] === get_current_user_id()) {
+                            return true; // Access granted
                         }
                     }
-                    if ($granted === false) {
-                        wp_die(
-                            '<h1>' . __('Hello, you are not Superman, with full access?') . '</h1>' .
-                            '<p>' . __('Missing permissions') . '</p>',
-                            403
-                        );
-                    }
+                }
+
+                return false;
+            }
+
+        }
+
+        return true; // No user restriction 
+    }
+
+    public function forceEcryptedFileDownload() {
+        if(isset($_GET['modFormDownloadEncFile'])) {
+
+            //Verify that there is a module id included
+            if(!isset($_GET['modFormModuleId']) || (isset($_GET['modFormModuleId']) && !is_numeric($_GET['modFormModuleId']))) {
+                wp_die(
+                    __("No reference to a module where defined.", 'modularity-form-builder'),
+                    __("Module reference missing", 'modularity-form-builder')
+                );
+            }
+
+            //Check if granted user
+            if(!$this->isGrantedUser($_GET['modFormModuleId'])) {
+                wp_die(
+                    __("You are not authorized to download this file.", 'modularity-form-builder'),
+                    __("Unauthorized request", 'modularity-form-builder')
+                );
+            }
+
+            //Get uploads folder
+            $uploadsFolder = wp_upload_dir();
+            $uploadsFolder = $uploadsFolder['basedir'] . '/modularity-form-builder/';
+
+            //Get local path to file 
+            $filePath = $uploadsFolder . urldecode($_GET['modFormDownloadEncFile']); 
+
+            //Decrypt and return
+            if(file_exists($filePath)) {
+                if (defined('ENCRYPT_SECRET_VI') && defined('ENCRYPT_SECRET_KEY') && defined('ENCRYPT_METHOD')) {
+                    $fileContents = \ModularityFormBuilder\App::encryptDecryptFile(
+                        'decrypt', 
+                        file_get_contents($filePath)
+                    );
                 }
             }
+
+            //Return file force download
+            if(isset($fileContents) && !empty($fileContents)) {
+                header("Pragma: public");
+                header("Expires: 0");
+                header("Cache-Control: must-revalidate, post-check=0, pre-check=0");
+                header("Cache-Control: private", false);
+                header("Content-Type: application/octet-stream");
+                header("Content-Disposition: attachment; filename=\"" . $_GET['modFormDownloadEncFile'] . "\";" );
+                header("Content-Transfer-Encoding: binary");
+
+                echo $fileContents;
+
+                exit;
+            }
+
+            //No file found
+            wp_die(
+                __("The file you requested could not be found. The file might have been deleted or corrupted.", 'modularity-form-builder'),
+                __("File not found", 'modularity-form-builder')
+            );
+            
         }
     }
 
+    /**
+     * Get the download link to the file
+     * @return string
+     */
+    public function getDownloadLink($filePath, $moduleId = null) {
+
+        //Encrypted file requires granted users 
+        if(is_null($moduleId) || !$this->isGrantedUser($moduleId)) {
+            return false;
+        }
+        
+        //Check if encrypted
+        if (strpos($filePath, sanitize_file_name("-enc-" . ENCRYPT_METHOD)) !== false) {
+
+            if(strpos($_SERVER['REQUEST_URI'], "?") !== false) {
+                $sep = "&"; 
+            } else {
+                $sep = "?";
+            }
+
+            return "//" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'] . $sep . 'modFormDownloadEncFile=' . urlencode(basename($filePath)) . "&modFormModuleId=" . $moduleId ;
+        }
+
+        return $filePath; 
+    }
 
     /**
      * Displays the form data, as static data or editable
@@ -179,19 +288,58 @@ class PostType
     {
         global $post;
 
-        $data = $this->gatherFormData($post);
+        //Get form configuration
+        $data = self::gatherFormData($post);
+        $data['parentClass'] = $this;
+        
+        //Check if user is granted to view this data
+        if(!$this->isGrantedUser($data['module_id'])) {
+
+            //Error message
+            $this->renderBlade(
+                'unauthorized.blade.php', 
+                array(
+                    FORM_BUILDER_MODULE_PATH . 'source/php/Module/views/admin'
+                ), 
+                array(
+                    'title' => __("Access denied", 'modularity-form-builder'),
+                    'message' => __("You don't have the sufficient permissions to view this post.", 'modularity-form-builder'),
+                )
+            );
+            
+            return;
+        }
+
+        //Translations 
+        $data['translation'] = array(
+            'removed_file' => __("File removed", 'modularity-form-builder'),
+            'unknown_file' => __("Unknown file", 'modularity-form-builder'),
+        ); 
+        
+        //Get form submission data 
         $fields = get_fields($data['module_id']);
-        $this->grantedUsers($data['module_id']);
-        $data['excludedFront'] = apply_filters('ModularityFormBuilder/excluded_fields/front', array(), $post->post_type,
-            $data['module_id']);
+
+        //Check if this should be exluded from frontend
+        $data['excludedFront'] = apply_filters('ModularityFormBuilder/excluded_fields/front',
+            array(), 
+            $post->post_type,
+            $data['module_id']
+        );
 
         if (is_admin() && isset($fields['editable_back_end']) && $fields['editable_back_end'] == true) {
-            $template = new \Municipio\template;
-            $view = \Municipio\Helper\Template::locateTemplate('form-edit.blade.php',
-                array(FORM_BUILDER_MODULE_PATH . 'source/php/Module/views'));
-            $view = $template->cleanViewPath($view);
-            $template->render($view, $data);
+
+            //Editable
+            $this->renderBlade(
+                'form-edit.blade.php', 
+                array(
+                    FORM_BUILDER_MODULE_PATH . 'source/php/Module/views'
+                ), 
+                $data
+            );
+
         } elseif (self::editableFrontend($post)) {
+
+            //Editor settings 
             $data['editor_settings'] = array(
                 'wpautop' => true,
                 'media_buttons' => false,
@@ -201,15 +349,41 @@ class PostType
                     'plugins' => 'wordpress',
                 ),
             );
-            include FORM_BUILDER_MODULE_PATH . 'source/php/Module/views/admin/formdata.php';
-            $this->renderBlade('form-edit-front.blade.php', array(FORM_BUILDER_MODULE_PATH . 'source/php/Module/views'),
-                $data);
+
+            //Static
+            $this->renderBlade(
+                'form-data.blade.php', 
+                array(
+                    FORM_BUILDER_MODULE_PATH . 'source/php/Module/views/admin'
+                ), 
+                $data
+            );
+
+            //Editable
+            $this->renderBlade(
+                'form-edit-front.blade.php', 
+                array(
+                    FORM_BUILDER_MODULE_PATH . 'source/php/Module/views'
+                ),
+                $data
+            );
+
         } else {
-            include FORM_BUILDER_MODULE_PATH . 'source/php/Module/views/admin/formdata.php';
+
+            //Static
+            $this->renderBlade(
+                'form-data.blade.php', 
+                array(
+                    FORM_BUILDER_MODULE_PATH . 'source/php/Module/views/admin'
+                ), 
+                $data
+            );
+
         }
+
         if (is_admin()) {
 
-            $indata = (is_array( get_post_meta($post->ID, 'form-data', true))) ?  get_post_meta($post->ID, 'form-data', true) : unserialize(\ModularityFormBuilder\App::encryptDecryptData('decrypt',
+            $indata = (is_array(get_post_meta($post->ID, 'form-data', true))) ? get_post_meta($post->ID, 'form-data', true) : unserialize(\ModularityFormBuilder\App::encryptDecryptData('decrypt',
                 get_post_meta($post->ID, 'form-data', true)));
 
             if (isset($indata['modularity-form-history'])) {
@@ -232,18 +406,11 @@ class PostType
     }
 
 
-    public function gatherFormData($post)
+    public static function gatherFormData($post)
     {
         $data = array();
         $getData = get_post_meta($post->ID, 'form-data', true);
-
-        if (!get_option('options_mod_form_crypt')) {
-            $indata = (is_array($getData)) ? $getData : unserialize(\ModularityFormBuilder\App::encryptDecryptData('decrypt',
-                $getData));
-        } else {
-            $indata = (!is_array($getData)) ? unserialize(\ModularityFormBuilder\App::encryptDecryptData('decrypt',
-                $getData)) : $getData;
-        }
+        $indata = (is_array($getData)) ? $getData : unserialize(\ModularityFormBuilder\App::encryptDecryptData('decrypt', $getData));
 
         // Get the form id
         if (!empty($indata['modularity-form-id'])) {
@@ -296,7 +463,7 @@ class PostType
             }
 
             if ($field['acf_fc_layout'] === 'sender') {
-                $field['labels'] = self::getSenderLabels();
+                $field['labels'] = \ModularityFormBuilder\Helper\SenderLabels::getLabels();
                 // Merge default and custom labels
                 if (!empty($field['custom_sender_labels']['add_sender_labels'])) {
                     $field['labels'] = array_merge($field['labels'], array_filter($field['custom_sender_labels']));
@@ -332,8 +499,8 @@ class PostType
     /**
      * Render and output blade template
      * @param string $fileName Filename
-     * @param array $path Array with file paths
-     * @param array $data Template data
+     * @param array  $path     Array with file paths
+     * @param array  $data     Template data
      */
     public function renderBlade($fileName, $path, $data = array())
     {
@@ -384,34 +551,6 @@ class PostType
     }
 
     /**
-     * Filters admin list table
-     * @return void
-     */
-    public function formFilter()
-    {
-        global $typenow;
-
-        if ($typenow !== 'form-submissions') {
-            return;
-        }
-
-        $forms = get_posts(array(
-            'post_type' => 'mod-form',
-            'post_status' => 'publish',
-            'posts_per_page' => -1,
-            'numberposts' => -1
-        ));
-
-        echo '<select name="form"><option value="-1">' . __('Select form…', 'modularity-form-builder') . '</option>';
-
-        foreach ($forms as $form) {
-            $selected = isset($_GET['form']) && $_GET['form'] == $form->ID ? 'selected' : '';
-            echo '<option value="' . $form->ID . '" ' . $selected . '>' . $form->post_title . '</option>';
-        }
-        echo '</select>';
-    }
-
-    /**
      * Filter the wp query
      * @param  WP_Query $query
      * @return void
@@ -454,7 +593,7 @@ class PostType
     /**
      * Content for table columns
      * @param  string $column
-     * @param  int $postId
+     * @param  int    $postId
      * @return void
      */
     public function tableColumnsContent($column, $postId)
@@ -489,26 +628,6 @@ class PostType
     }
 
     /**
-     * Translated sender labels
-     * @return array
-     */
-    public static function getSenderLabels()
-    {
-        $labels = array(
-            'firstname' => __('Firstname', 'modularity-form-builder'),
-            'lastname' => __('Lastname', 'modularity-form-builder'),
-            'email' => __('Email', 'modularity-form-builder'),
-            'phone' => __('Phone', 'modularity-form-builder'),
-            'address' => __('Address', 'modularity-form-builder'),
-            'street_address' => __('Street address', 'modularity-form-builder'),
-            'postal_code' => __('Postal code', 'modularity-form-builder'),
-            'city' => __('City', 'modularity-form-builder')
-        );
-
-        return $labels;
-    }
-
-    /**
      * Display feedback ID
      * @param  object $post Current post object
      * @return void
@@ -516,32 +635,8 @@ class PostType
     public function displayFeedbackId($post)
     {
         if ($post->post_type == $this->postTypeSlug) {
-            echo '<div class="inside"><span><strong>' . __('Feedback ID') . ':</strong> ' . $post->ID . '</span></div>';
+            echo '<div class="inside"><span><strong>' . __('ID') . ':</strong> ' . $post->ID . '</span></div>';
         }
-    }
-
-    /**
-     * Add custom post types to post type list
-     * @param  array $field Field data
-     * @return array        Modified field data
-     */
-    public function submissionPostTypes($field)
-    {
-        if (get_post_type() == 'acf-field-group') {
-            return $field;
-        }
-
-        $field['choices']['form-submissions'] = __('Form submissions', 'modularity-form-builder');
-
-        if (current_user_can('administrator')) {
-            $postTypes = get_post_types(array('_builtin' => false, 'public' => true));
-            foreach ($postTypes as $postType) {
-                $postTypeObj = get_post_type_object($postType);
-                $field['choices'][$postTypeObj->name] = $postTypeObj->labels->singular_name;
-            }
-        }
-
-        return $field;
     }
 
     /**
@@ -568,10 +663,8 @@ class PostType
         if (!get_option('options_mod_form_crypt')) {
             $currentData = get_post_meta($postId, 'form-data', true);
         } else {
-            $currentData = unserialize(\ModularityFormBuilder\App::encryptDecryptData('decrypt',
-                get_post_meta($postId, 'form-data', true)));
+            $currentData = unserialize(\ModularityFormBuilder\App::encryptDecryptData('decrypt', get_post_meta($postId, 'form-data', true)));
         }
-
 
         // Merge old values with new ones
         if (is_array($currentData) && !empty($currentData)) {
@@ -582,34 +675,7 @@ class PostType
         if (!get_option('options_mod_form_crypt')) {
             update_post_meta($postId, 'form-data', $updatedData);
         } else {
-            update_post_meta($postId, 'form-data',
-                \ModularityFormBuilder\App::encryptDecryptData('encrypt', serialize($updatedData)));
-        }
-
-    }
-
-    public function jsonSelectedValues()
-    {
-
-        //Get saved data
-        $fieldData = get_field('notify');
-
-        //Declare result
-        $result = array();
-
-        //Fill result array
-        if (isset($fieldData) && is_array($fieldData) && !empty($fieldData)) {
-            foreach ($fieldData as $field) {
-                $result[] = array(
-                    'conditional_field' => $field['form_conditional_field'],
-                    'conditional_field_equals' => $field['form_conditional_field_equals']
-                );
-            }
-        }
-
-        //Print json array
-        if (is_array($result) && !empty($result)) {
-            echo "<script> var notificationConditions = '" . json_encode($result) . "'; </script>";
+            update_post_meta($postId, 'form-data', \ModularityFormBuilder\App::encryptDecryptData('encrypt', $updatedData));
         }
     }
 }

@@ -6,7 +6,9 @@ class Options
 {
     public function __construct()
     {
-        add_action('admin_menu', array($this, 'addOptionsFields'));
+        add_action('admin_menu', array($this, 'addOptionsFields'), 9);
+        add_filter('acf/load_field/name=submission_post_type', array($this, 'submissionPostTypes'));
+        add_filter('acf/load_field/name=form_builder_is_admin', array($this, 'isAdmin'), 10, 3);
     }
 
     /**
@@ -16,8 +18,8 @@ class Options
     {
         add_submenu_page(
             'edit.php?post_type=form-submissions',
-            __('Options', 'google-analytics'),
-            __('Options', 'google-analytics'),
+            __('Form builder options', 'modularity-form-builder'),
+            __('Options', 'modularity-form-builder'),
             'manage_options',
             'mod-form-options',
             array($this, 'optionsPage')
@@ -41,7 +43,6 @@ class Options
             update_option('options_mod_form_secret', $_POST['client-secret']);
             update_option('options_mod_form_crypt', isset($_POST['encrypt']) && $_POST['encrypt'] == true ? 1 : null);
         }
-
 
 
         // Delete oauth credentials
@@ -118,5 +119,54 @@ class Options
         }
 
         return $markup;
+    }
+
+    /**
+     * Add custom post types to post type list
+     * @param  array $field Field data
+     * @return array        Modified field data
+     */
+    public function submissionPostTypes($field)
+    {
+        if (get_post_type() == 'acf-field-group') {
+            return $field;
+        }
+        // Default post type
+        $field['choices']['form-submissions'] = __('Form submissions', 'modularity-form-builder');
+
+        // Get custom post types
+        $customPostTypes = get_field('avabile_dynamic_post_types', 'option');
+        if (!is_array($customPostTypes) || empty($customPostTypes)) {
+            return $field;
+        }
+        $customPostTypes = array_column($customPostTypes, 'post_type_name');
+        // Get all post types objects
+        $postTypes = get_post_types(array('_builtin' => false));
+        $postTypes = array_map(function ($postType) {
+            $postTypeObj = get_post_type_object($postType);
+            return $postTypeObj;
+        }, $postTypes);
+        foreach ($postTypes as $postType) {
+            if (in_array($postType->label, $customPostTypes)) {
+                $field['choices'][$postType->name] = $postType->label;
+            }
+        }
+
+        $field['choices'] = apply_filters('ModularityFormBuilder/options/post_types', $field['choices']);
+        return $field;
+    }
+
+    /**
+     * Check if current user is admin
+     * @param  array $field Field data
+     * @return array        Modified field data
+     */
+    public function isAdmin($field)
+    {
+        if (current_user_can('administrator') && get_post_type() != 'acf-field-group') {
+            $field['choices'] = array('true' => 'true');
+        }
+
+        return $field;
     }
 }
